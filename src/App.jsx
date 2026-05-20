@@ -283,6 +283,62 @@ export default function SVGColorChanger() {
     }
   };
 
+  const handleDownloadPNG = () => {
+    try {
+      const modified = getModifiedSVG();
+      const DPI = 300;
+      const SCREEN_DPI = 96;
+      const scale = DPI / SCREEN_DPI;
+
+      const parser = new DOMParser();
+      const svgDoc = parser.parseFromString(modified, "image/svg+xml");
+      const svgEl = svgDoc.querySelector("svg");
+
+      let svgW = parseFloat(svgEl?.getAttribute("width")) || 0;
+      let svgH = parseFloat(svgEl?.getAttribute("height")) || 0;
+
+      if (!svgW || !svgH) {
+        const vb = svgEl?.getAttribute("viewBox")?.split(/[\s,]+/);
+        if (vb && vb.length === 4) { svgW = parseFloat(vb[2]); svgH = parseFloat(vb[3]); }
+      }
+      if (!svgW || !svgH) { svgW = 512; svgH = 512; }
+
+      const canvasW = Math.round(svgW * scale);
+      const canvasH = Math.round(svgH * scale);
+
+      const canvas = document.createElement("canvas");
+      canvas.width = canvasW;
+      canvas.height = canvasH;
+      const ctx = canvas.getContext("2d");
+
+      const svgBlob = new Blob([modified], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(svgBlob);
+      const img = new Image();
+
+      img.onload = () => {
+        ctx.drawImage(img, 0, 0, canvasW, canvasH);
+        URL.revokeObjectURL(url);
+        canvas.toBlob((blob) => {
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = fileName.replace(/\.svg$/i, "_300dpi.png");
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }, "image/png");
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        alert("No se pudo renderizar el SVG. Intenta con otro archivo.");
+      };
+
+      img.src = url;
+    } catch (err) {
+      alert("Error al exportar PNG: " + err.message);
+    }
+  };
+
   const handleCopy = async () => {
     await navigator.clipboard.writeText(getModifiedSVG());
     setCopied(true);
@@ -376,15 +432,21 @@ export default function SVGColorChanger() {
                 </div>
               </div>
 
-              <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                <button className="btn" onClick={handleDownload} style={{ flex: 1, padding: "12px", background: "#c8f566", color: "#0e0e0e", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 600, fontFamily: "inherit", letterSpacing: "0.05em" }}>
-                  ↓ Descargar SVG
-                </button>
-                <button className="btn" onClick={handleCopy} style={{ padding: "12px 16px", background: "#1e1e1e", color: copied ? "#c8f566" : "#888", border: "1px solid #2a2a2a", borderRadius: 10, fontSize: 13, fontFamily: "inherit" }}>
-                  {copied ? "✓" : "⎘"}
-                </button>
-                <button className="btn" onClick={() => { setSvgText(""); setColors([]); setColorMap({}); setFileName(""); }} style={{ padding: "12px 16px", background: "#1e1e1e", color: "#666", border: "1px solid #2a2a2a", borderRadius: 10, fontSize: 13, fontFamily: "inherit" }}>
-                  ✕
+              <div style={{ display: "flex", gap: 10, marginTop: 12, flexDirection: "column" }}>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button className="btn" onClick={handleDownload} style={{ flex: 1, padding: "12px", background: "#c8f566", color: "#0e0e0e", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 600, fontFamily: "inherit", letterSpacing: "0.05em" }}>
+                    ↓ Descargar SVG
+                  </button>
+                  <button className="btn" onClick={handleCopy} style={{ padding: "12px 16px", background: "#1e1e1e", color: copied ? "#c8f566" : "#888", border: "1px solid #2a2a2a", borderRadius: 10, fontSize: 13, fontFamily: "inherit" }}>
+                    {copied ? "✓" : "⎘"}
+                  </button>
+                  <button className="btn" onClick={() => { setSvgText(""); setColors([]); setColorMap({}); setFileName(""); }} style={{ padding: "12px 16px", background: "#1e1e1e", color: "#666", border: "1px solid #2a2a2a", borderRadius: 10, fontSize: 13, fontFamily: "inherit" }}>
+                    ✕
+                  </button>
+                </div>
+                <button className="btn" onClick={handleDownloadPNG} style={{ width: "100%", padding: "12px", background: "#1e1e1e", color: "#e8e8e0", border: "1px solid #2a2a2a", borderRadius: 10, fontSize: 13, fontWeight: 500, fontFamily: "inherit", letterSpacing: "0.05em", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                  <span style={{ fontSize: 11, background: "rgba(200,245,102,0.15)", color: "#c8f566", padding: "2px 6px", borderRadius: 4, letterSpacing: "0.1em" }}>300 DPI</span>
+                  ↓ Exportar PNG
                 </button>
               </div>
             </div>
