@@ -784,7 +784,7 @@ export default function App() {
             <span style={{fontSize:11,letterSpacing:"0.2em",color:"#666",textTransform:"uppercase"}}>Design Tools</span>
           </div>
           <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:"clamp(28px,4vw,46px)",fontWeight:800,margin:0,lineHeight:1,letterSpacing:"-0.02em"}}>
-            SVG<span style={{color:"#c8f566"}}> Studio</span>
+            SVG<span style={{color:"#c8f566"}}> Weás</span>
           </h1>
         </div>
 
@@ -804,7 +804,7 @@ export default function App() {
         {activeTab==="qr" && <TabQR/>}
 
         <div style={{marginTop:40,textAlign:"center",fontSize:11,color:"#2a2a2a",letterSpacing:"0.05em"}}>
-          SVG Studio · Solo procesa archivos localmente · Creado por Chris Lafken
+          SVG Weás · Solo procesa archivos localmente · Creado por Chris Lafken
         </div>
       </div>
     </div>
