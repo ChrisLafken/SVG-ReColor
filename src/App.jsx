@@ -52,7 +52,7 @@ const buildEAN13SVG = (code, barColor, bgColor, transparent) => {
   const quietZone = 14;
   const barcodeH = 69;
   const guardExtra = 5;
-  const textH = 13;
+  const textH = 12;
   const totalH = barcodeH + guardExtra + textH + 2;
   const totalW = quietZone * 2 + 95 * barW;
 
@@ -76,54 +76,18 @@ const buildEAN13SVG = (code, barColor, bgColor, transparent) => {
     bitX += seg.bits.length * barW;
   }
 
-  // Text baseline aligns with bottom of guard bars (barcodeH + guardExtra)
-  // Guards extend 5px below normal bars — numbers sit flush at that line
-  const textZoneY = barcodeH; // clear rects start where normal bars end
-  const textZoneH = guardExtra + textH + 2;
-  const textY = barcodeH + guardExtra + textH - 1; // baseline flush with guard bottom
-  const fs = 13;
-  const textBg = transparent ? "none" : bgColor;
-
-  // Build left group: digits 1-6, grouped in a single white rect behind them
-  const leftStart = digitSegs[1]?.startX ?? quietZone;
-  const leftEnd   = digitSegs[6]?.endX   ?? (quietZone + 42 * barW);
-  const rightStart = digitSegs[7]?.startX ?? (quietZone + 50 * barW);
-  const rightEnd   = digitSegs[12]?.endX  ?? (quietZone + 92 * barW);
-
-  // White rectangles behind digit groups (clear bar overlap)
-  let clearRects = "";
-  if (textBg !== "none") {
-    // Under first digit (outside left guard)
-    clearRects += `<rect x="0" y="${textZoneY}" width="${quietZone + 2}" height="${textZoneH}" fill="${textBg}"/>`;
-    // Under left group
-    clearRects += `<rect x="${leftStart}" y="${textZoneY}" width="${leftEnd - leftStart}" height="${textZoneH}" fill="${textBg}"/>`;
-    // Under right group
-    clearRects += `<rect x="${rightStart}" y="${textZoneY}" width="${rightEnd - rightStart}" height="${textZoneH}" fill="${textBg}"/>`;
-    // After right guard to end
-    clearRects += `<rect x="${rightEnd}" y="${textZoneY}" width="${totalW - rightEnd}" height="${textZoneH}" fill="${textBg}"/>`;
-  }
-
-  // First digit: centered in left quiet zone
-  let texts = `<text x="${(quietZone - 2) / 2}" y="${textY}" font-family="'OCR-B','Courier New',monospace" font-size="${fs}" text-anchor="middle" fill="${barColor}">${code[0]}</text>`;
-
-  // Left group digits 1-6
-  for (let i = 1; i <= 6; i++) {
+  const textY = barcodeH + guardExtra + textH - 1;
+  const fs = 9;
+  let texts = `<text x="${quietZone - 5}" y="${textY}" font-family="monospace" font-size="${fs}" text-anchor="middle" fill="${barColor}">${code[0]}</text>`;
+  for (let i = 1; i <= 12; i++) {
     const s = digitSegs[i];
     if (!s) continue;
     const cx = (s.startX + s.endX) / 2;
-    texts += `<text x="${cx}" y="${textY}" font-family="'OCR-B','Courier New',monospace" font-size="${fs}" text-anchor="middle" fill="${barColor}">${code[i]}</text>`;
-  }
-
-  // Right group digits 7-12
-  for (let i = 7; i <= 12; i++) {
-    const s = digitSegs[i];
-    if (!s) continue;
-    const cx = (s.startX + s.endX) / 2;
-    texts += `<text x="${cx}" y="${textY}" font-family="'OCR-B','Courier New',monospace" font-size="${fs}" text-anchor="middle" fill="${barColor}">${code[i]}</text>`;
+    texts += `<text x="${cx}" y="${textY}" font-family="monospace" font-size="${fs}" text-anchor="middle" fill="${barColor}">${code[i]}</text>`;
   }
 
   const bgRect = transparent ? "" : `<rect width="${totalW}" height="${totalH}" fill="${bgColor}"/>`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}">\n  ${bgRect}\n  ${bars}\n  ${clearRects}\n  ${texts}\n</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}">\n  ${bgRect}\n  ${bars}\n  ${texts}\n</svg>`;
 };
 
 const exportSVGasPNG = (svgText, filename, scale=3.125) => {
@@ -427,12 +391,12 @@ function TabBarcode() {
               style={{width:"100%",padding:"12px",background:"#c8f566",color:"#0e0e0e",border:"none",borderRadius:10,fontSize:13,fontWeight:600,fontFamily:"inherit"}}>
               ↓ Descargar SVG
             </button>
-            <button className="btn" onClick={()=>exportSVGasPNG(svgCode, `EAN13_${full13}_300dpi.png`)}
+            <button className="btn" onClick={()=>exportSVGasPNG(transparent ? buildEAN13SVG(full13,barColor,bgColor,false) : svgCode, `EAN13_${full13}_300dpi.png`)}
               style={{width:"100%",padding:"12px",background:"#1e1e1e",color:"#e8e8e0",border:"1px solid #2a2a2a",borderRadius:10,fontSize:13,fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
               <span style={{fontSize:11,background:"rgba(200,245,102,0.15)",color:"#c8f566",padding:"2px 6px",borderRadius:4}}>300 DPI</span> ↓ Exportar PNG
             </button>
             <div style={{padding:"10px 14px",background:"#0e0e0e",border:"1px solid #1e1e1e",borderRadius:8,fontSize:11,color:"#444",lineHeight:1.6}}>
-              ℹ️ El SVG es vectorial y escalable sin pérdida de calidad. {transparent?"El PNG se exporta con fondo transparente.":"El PNG se exporta a 300 DPI."}
+              ℹ️ El SVG es vectorial y escalable sin pérdida de calidad.{transparent?" El PNG se exporta sin fondo.":""}
             </div>
           </div>
         )}
@@ -478,7 +442,6 @@ export default function App() {
           <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:"clamp(28px,4vw,46px)",fontWeight:800,margin:0,lineHeight:1,letterSpacing:"-0.02em"}}>
             SVG<span style={{color:"#c8f566"}}> Studio</span>
           </h1>
-          <p style={{color:"#555",marginTop:10,fontSize:13,lineHeight:1.6}}>Herramientas para diseñadores gráficos · todo en un solo lugar.</p>
         </div>
 
         {/* Tab bar */}
