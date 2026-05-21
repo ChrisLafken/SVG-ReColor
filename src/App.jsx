@@ -459,7 +459,7 @@ export default function App() {
         {activeTab==="barcode" && <TabBarcode/>}
 
         <div style={{marginTop:40,textAlign:"center",fontSize:11,color:"#2a2a2a",letterSpacing:"0.05em"}}>
-          SVG Studio · Solo procesa archivos localmente
+          SVG Studio · Solo procesa archivos localmente · Creado por Chris Lafken
         </div>
       </div>
     </div>
