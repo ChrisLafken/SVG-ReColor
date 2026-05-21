@@ -110,6 +110,40 @@ const exportSVGasPNG = (svgText, filename, scale=3.125) => {
   img.src = url;
 };
 
+
+const copyPNGToClipboard = (svgText, onDone) => {
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(svgText, "image/svg+xml");
+    const el = doc.querySelector("svg");
+    const w = parseFloat(el?.getAttribute("width") || "200");
+    const h = parseFloat(el?.getAttribute("height") || "200");
+    const scale = 300 / 96;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(w * scale);
+    canvas.height = Math.round(h * scale);
+    const ctx = canvas.getContext("2d");
+    const blob = new Blob([svgText], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      canvas.toBlob(async (b) => {
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ "image/png": b })]);
+          onDone(true);
+        } catch(e) {
+          alert("No se pudo copiar: " + e.message);
+          onDone(false);
+        }
+      }, "image/png");
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); alert("Error al renderizar."); onDone(false); };
+    img.src = url;
+  } catch(e) { alert(e.message); onDone(false); }
+};
+
 const downloadText = (text, filename, mime) => {
   const blob = new Blob([text],{type:mime});
   const url = URL.createObjectURL(blob);
@@ -177,6 +211,7 @@ function TabSVGChanger() {
   const [colorMap, setColorMap] = useState({});
   const [dragging, setDragging] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copiedPNG, setCopiedPNG] = useState(false);
   const [expandedColor, setExpandedColor] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -222,9 +257,12 @@ function TabSVGChanger() {
                 <button className="btn" onClick={handleCopy} style={{padding:"12px 16px",background:"#1e1e1e",color:copied?"#c8f566":"#888",border:"1px solid #2a2a2a",borderRadius:10,fontSize:13,fontFamily:"inherit"}}>{copied?"✓":"⎘"}</button>
                 <button className="btn" onClick={()=>{setSvgText("");setColors([]);setColorMap({});setFileName("");}} style={{padding:"12px 16px",background:"#1e1e1e",color:"#666",border:"1px solid #2a2a2a",borderRadius:10,fontSize:13,fontFamily:"inherit"}}>✕</button>
               </div>
-              <button className="btn" onClick={handleDownloadPNG} style={{width:"100%",padding:"12px",background:"#1e1e1e",color:"#e8e8e0",border:"1px solid #2a2a2a",borderRadius:10,fontSize:13,fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
-                <span style={{fontSize:11,background:"rgba(200,245,102,0.15)",color:"#c8f566",padding:"2px 6px",borderRadius:4}}>300 DPI</span> ↓ Exportar PNG
-              </button>
+              <div style={{display:"flex",gap:10}}>
+                <button className="btn" onClick={handleDownloadPNG} style={{flex:1,padding:"12px",background:"#1e1e1e",color:"#e8e8e0",border:"1px solid #2a2a2a",borderRadius:10,fontSize:13,fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+                  <span style={{fontSize:11,background:"rgba(200,245,102,0.15)",color:"#c8f566",padding:"2px 6px",borderRadius:4}}>300 DPI</span> ↓ Exportar PNG
+                </button>
+                <button className="btn" onClick={()=>copyPNGToClipboard(getModified(),ok=>{if(ok){setCopiedPNG(true);setTimeout(()=>setCopiedPNG(false),2000);}})} style={{padding:"12px 16px",background:"#1e1e1e",color:copiedPNG?"#c8f566":"#888",border:"1px solid #2a2a2a",borderRadius:10,fontSize:13,fontFamily:"inherit"}} title="Copiar PNG al portapapeles">{copiedPNG?"✓":"⎘"}</button>
+              </div>
             </div>
           </div>
           <div style={{background:"#141414",border:"1px solid #222",borderRadius:16,overflow:"hidden"}}>
@@ -277,6 +315,7 @@ function TabBarcode() {
   const [svgCode, setSvgCode] = useState("");
   const [barColorMode, setBarColorMode] = useState("picker");
   const [bgColorMode, setBgColorMode] = useState("picker");
+  const [copiedPNG, setCopiedPNG] = useState(false);
 
   const digits12 = input.replace(/\D/g,"").slice(0,12);
   const checkDigit = digits12.length===12 ? calcEAN13Check(digits12) : null;
@@ -391,10 +430,13 @@ function TabBarcode() {
               style={{width:"100%",padding:"12px",background:"#c8f566",color:"#0e0e0e",border:"none",borderRadius:10,fontSize:13,fontWeight:600,fontFamily:"inherit"}}>
               ↓ Descargar SVG
             </button>
-            <button className="btn" onClick={()=>exportSVGasPNG(transparent ? buildEAN13SVG(full13,barColor,bgColor,false) : svgCode, `EAN13_${full13}_300dpi.png`)}
-              style={{width:"100%",padding:"12px",background:"#1e1e1e",color:"#e8e8e0",border:"1px solid #2a2a2a",borderRadius:10,fontSize:13,fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
-              <span style={{fontSize:11,background:"rgba(200,245,102,0.15)",color:"#c8f566",padding:"2px 6px",borderRadius:4}}>300 DPI</span> ↓ Exportar PNG
-            </button>
+            <div style={{display:"flex",gap:10}}>
+              <button className="btn" onClick={()=>exportSVGasPNG(transparent ? buildEAN13SVG(full13,barColor,bgColor,false) : svgCode, `EAN13_${full13}_300dpi.png`)}
+                style={{flex:1,padding:"12px",background:"#1e1e1e",color:"#e8e8e0",border:"1px solid #2a2a2a",borderRadius:10,fontSize:13,fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+                <span style={{fontSize:11,background:"rgba(200,245,102,0.15)",color:"#c8f566",padding:"2px 6px",borderRadius:4}}>300 DPI</span> ↓ Exportar PNG
+              </button>
+              <button className="btn" onClick={()=>copyPNGToClipboard(svgCode, ok=>{if(ok){setCopiedPNG(true);setTimeout(()=>setCopiedPNG(false),2000);}})} style={{padding:"12px 16px",background:"#1e1e1e",color:copiedPNG?"#c8f566":"#888",border:"1px solid #2a2a2a",borderRadius:10,fontSize:13,fontFamily:"inherit"}} title="Copiar PNG al portapapeles">{copiedPNG?"✓":"⎘"}</button>
+            </div>
             <div style={{padding:"10px 14px",background:"#0e0e0e",border:"1px solid #1e1e1e",borderRadius:8,fontSize:11,color:"#444",lineHeight:1.6}}>
               ℹ️ El SVG es vectorial y escalable sin pérdida de calidad.{transparent?" El PNG se exporta sin fondo.":""}
             </div>
@@ -634,6 +676,7 @@ function TabQR() {
   const [transparent, setTransparent] = useState(false);
   const [darkMode, setDarkMode] = useState("picker");
   const [lightMode, setLightMode] = useState("picker");
+  const [copiedPNG, setCopiedPNG] = useState(false);
   const [svgCode, setSvgCode] = useState("");
   const [error, setError] = useState("");
 
@@ -737,10 +780,13 @@ function TabQR() {
               style={{width:"100%",padding:"12px",background:"#c8f566",color:"#0e0e0e",border:"none",borderRadius:10,fontSize:13,fontWeight:600,fontFamily:"inherit"}}>
               ↓ Descargar SVG
             </button>
-            <button className="btn" onClick={()=>exportSVGasPNG(svgCode,`QR_code_300dpi.png`)}
-              style={{width:"100%",padding:"12px",background:"#1e1e1e",color:"#e8e8e0",border:"1px solid #2a2a2a",borderRadius:10,fontSize:13,fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
-              <span style={{fontSize:11,background:"rgba(200,245,102,0.15)",color:"#c8f566",padding:"2px 6px",borderRadius:4}}>300 DPI</span> ↓ Exportar PNG
-            </button>
+            <div style={{display:"flex",gap:10}}>
+              <button className="btn" onClick={()=>exportSVGasPNG(svgCode,`QR_code_300dpi.png`)}
+                style={{flex:1,padding:"12px",background:"#1e1e1e",color:"#e8e8e0",border:"1px solid #2a2a2a",borderRadius:10,fontSize:13,fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+                <span style={{fontSize:11,background:"rgba(200,245,102,0.15)",color:"#c8f566",padding:"2px 6px",borderRadius:4}}>300 DPI</span> ↓ Exportar PNG
+              </button>
+              <button className="btn" onClick={()=>copyPNGToClipboard(svgCode, ok=>{if(ok){setCopiedPNG(true);setTimeout(()=>setCopiedPNG(false),2000);}})} style={{padding:"12px 16px",background:"#1e1e1e",color:copiedPNG?"#c8f566":"#888",border:"1px solid #2a2a2a",borderRadius:10,fontSize:13,fontFamily:"inherit"}} title="Copiar PNG al portapapeles">{copiedPNG?"✓":"⎘"}</button>
+            </div>
           </div>
         )}
       </div>
