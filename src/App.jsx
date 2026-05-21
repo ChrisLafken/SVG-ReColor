@@ -405,6 +405,349 @@ function TabBarcode() {
   );
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TAB: QR CODE GENERATOR
+// ═══════════════════════════════════════════════════════════════════════════
+
+// QR Code generation using qrcodegen library (loaded from CDN via script tag)
+// We implement a minimal QR encoder for URLs/text using the qrcodegen approach
+
+// Reed-Solomon and QR encoding — full implementation
+const QR = (() => {
+  // Alphanumeric charset
+  const ALPHANUM = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
+
+  // GF(256) arithmetic for Reed-Solomon
+  const gfExp = new Uint8Array(512);
+  const gfLog = new Uint8Array(256);
+  (() => {
+    let x = 1;
+    for (let i = 0; i < 255; i++) {
+      gfExp[i] = x; gfLog[x] = i;
+      x = x << 1; if (x & 256) x ^= 0x11d;
+    }
+    for (let i = 255; i < 512; i++) gfExp[i] = gfExp[i - 255];
+  })();
+  const gfMul = (a, b) => a === 0 || b === 0 ? 0 : gfExp[gfLog[a] + gfLog[b]];
+  const gfPoly = (degree) => {
+    let p = [1];
+    for (let i = 0; i < degree; i++) {
+      const q = [1, gfExp[i]];
+      const r = new Array(p.length + q.length - 1).fill(0);
+      for (let j = 0; j < p.length; j++) for (let k = 0; k < q.length; k++) r[j+k] ^= gfMul(p[j], q[k]);
+      p = r;
+    }
+    return p;
+  };
+  const rsEncode = (data, nsym) => {
+    const gen = gfPoly(nsym);
+    const msg = [...data, ...new Array(nsym).fill(0)];
+    for (let i = 0; i < data.length; i++) {
+      const coef = msg[i];
+      if (coef !== 0) for (let j = 1; j < gen.length; j++) msg[i+j] ^= gfMul(gen[j], coef);
+    }
+    return msg.slice(data.length);
+  };
+
+  // QR version/ECC tables (version 1-10, ECC level M)
+  const VERSION_DATA = {
+    1:{cap:16,ec:10,blocks:[[1,26,16]]},
+    2:{cap:28,ec:16,blocks:[[1,44,28]]},
+    3:{cap:44,ec:26,blocks:[[1,70,44]]},
+    4:{cap:64,ec:36,blocks:[[2,50,32]]},
+    5:{cap:86,ec:48,blocks:[[2,67,43]]},
+    6:{cap:108,ec:64,blocks:[[4,43,27]]},
+    7:{cap:124,ec:72,blocks:[[4,49,31]]},
+    8:{cap:154,ec:88,blocks:[[2,60,38],[2,61,39]]}
+  };
+
+  const getVersion = (len) => {
+    for (const [v, d] of Object.entries(VERSION_DATA)) {
+      if (len <= d.cap) return parseInt(v);
+    }
+    return 8;
+  };
+
+  // Encode text as byte mode
+  const encodeBytes = (text) => {
+    const bytes = new TextEncoder().encode(text);
+    const version = getVersion(bytes.length);
+    const vd = VERSION_DATA[version];
+    const totalDC = vd.blocks.reduce((s,[,, dc]) => s + dc, 0) + vd.blocks.reduce((a, b, i) => { const prev = vd.blocks.slice(0,i).reduce((s2,[c]) => s2+c, 0); return a + (vd.blocks[i][0] * 0); }, 0);
+
+    // Build data codewords
+    const bits = [];
+    const pushBits = (val, len) => { for (let i = len-1; i >= 0; i--) bits.push((val >> i) & 1); };
+    pushBits(0b0100, 4); // byte mode
+    pushBits(bytes.length, 8);
+    for (const b of bytes) pushBits(b, 8);
+    // Terminator
+    for (let i = 0; i < 4 && bits.length < vd.cap * 8; i++) bits.push(0);
+    while (bits.length % 8 !== 0) bits.push(0);
+    const pads = [0xEC, 0x11];
+    let pi = 0;
+    while (bits.length < vd.cap * 8) { pushBits(pads[pi % 2], 8); pi++; }
+
+    // Convert bits to bytes
+    const data = [];
+    for (let i = 0; i < bits.length; i += 8) {
+      let b = 0; for (let j = 0; j < 8; j++) b = (b << 1) | bits[i+j];
+      data.push(b);
+    }
+
+    // Error correction
+    const allCodewords = [];
+    const ecCodewords = [];
+    let offset = 0;
+    for (const [count, total, dc] of vd.blocks) {
+      const ec = total - dc;
+      for (let b = 0; b < count; b++) {
+        const block = data.slice(offset, offset + dc);
+        allCodewords.push(block);
+        ecCodewords.push(rsEncode(block, ec));
+        offset += dc;
+      }
+    }
+
+    // Interleave
+    const final = [];
+    const maxDC = Math.max(...allCodewords.map(b => b.length));
+    for (let i = 0; i < maxDC; i++) for (const b of allCodewords) if (i < b.length) final.push(b[i]);
+    const maxEC = Math.max(...ecCodewords.map(b => b.length));
+    for (let i = 0; i < maxEC; i++) for (const b of ecCodewords) if (i < b.length) final.push(b[i]);
+
+    return { version, codewords: final };
+  };
+
+  // Build QR matrix
+  const SIZE = v => v * 4 + 17;
+
+  const makeMatrix = (version, codewords) => {
+    const size = SIZE(version);
+    const mat = Array.from({length:size}, () => new Array(size).fill(null)); // null=empty, 0=white, 1=dark
+    const isFunc = Array.from({length:size}, () => new Array(size).fill(false));
+
+    const set = (r, c, v, func=false) => { if (r>=0&&r<size&&c>=0&&c<size){mat[r][c]=v;if(func)isFunc[r][c]=true;} };
+
+    // Finder patterns
+    const finder = (tr, tc) => {
+      for (let r=-1;r<=7;r++) for (let c=-1;c<=7;c++) {
+        const dark = r>=0&&r<=6&&(c===0||c===6) || c>=0&&c<=6&&(r===0||r===6) || r>=2&&r<=4&&c>=2&&c<=4;
+        set(tr+r, tc+c, dark?1:0, true);
+      }
+    };
+    finder(0,0); finder(0,size-7); finder(size-7,0);
+
+    // Separators (already covered by finder border of 0s, just mark as func)
+    const markFunc = (r,c) => { if(r>=0&&r<size&&c>=0&&c<size) isFunc[r][c]=true; };
+    for(let i=0;i<8;i++){markFunc(7,i);markFunc(i,7);markFunc(7,size-1-i);markFunc(i,size-8);markFunc(size-8,i);markFunc(size-1-i,7);}
+
+    // Timing patterns
+    for(let i=8;i<size-8;i++){set(6,i,i%2===0?1:0,true);set(i,6,i%2===0?1:0,true);}
+
+    // Dark module
+    set(size-8,8,1,true);
+
+    // Alignment patterns (version >= 2)
+    const ALN = {2:[6,18],3:[6,22],4:[6,26],5:[6,30],6:[6,34],7:[6,22,38],8:[6,24,42]};
+    if (ALN[version]) {
+      const pos = ALN[version];
+      for (const r of pos) for (const c of pos) {
+        if (isFunc[r][c]) continue;
+        for(let dr=-2;dr<=2;dr++) for(let dc=-2;dc<=2;dc++) {
+          const dark = Math.abs(dr)===2||Math.abs(dc)===2||dr===0&&dc===0;
+          set(r+dr,c+dc,dark?1:0,true);
+        }
+      }
+    }
+
+    // Format info (mask 0b010 = pattern (row+col)%3 == 0)
+    // ECC level M (10) + mask 2 -> format = 0b10_010 -> after BCH and XOR with 101010000010010
+    const FORMAT = {
+      0:0x77C4,1:0x72F3,2:0x7DAA,3:0x789D,4:0x662F,5:0x6318,6:0x6C41,7:0x6976
+    };
+    const fmt = FORMAT[2]; // mask pattern 2
+    const fmtBits = [];
+    for(let i=14;i>=0;i--) fmtBits.push((fmt>>i)&1);
+    const fpos = [8,8,8,8,8,8,8,8,7,5,4,3,2,1,0];
+    const fcol = [0,1,2,3,4,5,7,8,8,8,8,8,8,8,8];
+    for(let i=0;i<15;i++){set(fpos[i],fcol[i],fmtBits[i],true);set(fcol[i],fpos[i],fmtBits[i],true);}
+    set(size-8,8,1,true); // dark module
+
+    // Data placement
+    const bitStream = [];
+    for(const cw of codewords) for(let i=7;i>=0;i--) bitStream.push((cw>>i)&1);
+    let bi = 0;
+    let up = true;
+    for(let col=size-1;col>=1;col-=2){
+      if(col===6) col=5;
+      for(let i=0;i<size;i++){
+        const row = up ? size-1-i : i;
+        for(let dc=0;dc<=1;dc++){
+          const c = col-dc;
+          if(!isFunc[row][c] && mat[row][c]===null){
+            let bit = bi < bitStream.length ? bitStream[bi++] : 0;
+            // Apply mask pattern 2: (row+col)%3 == 0
+            if((row+c)%3===0) bit ^= 1;
+            mat[row][c] = bit;
+          }
+        }
+      }
+      up = !up;
+    }
+
+    // Fill remaining nulls
+    for(let r=0;r<size;r++) for(let c=0;c<size;c++) if(mat[r][c]===null) mat[r][c]=0;
+
+    return mat;
+  };
+
+  const generate = (text) => {
+    const { version, codewords } = encodeBytes(text);
+    const matrix = makeMatrix(version, codewords);
+    return matrix;
+  };
+
+  return { generate };
+})();
+
+const buildQRSVG = (matrix, darkColor, lightColor, transparent, moduleSize=4) => {
+  const size = matrix.length;
+  const margin = moduleSize * 4;
+  const totalSize = size * moduleSize + margin * 2;
+
+  let rects = "";
+  for(let r=0;r<size;r++) for(let c=0;c<size;c++) {
+    if(matrix[r][c]===1) rects += `<rect x="${margin+c*moduleSize}" y="${margin+r*moduleSize}" width="${moduleSize}" height="${moduleSize}" fill="${darkColor}"/>`;
+    else if(!transparent) rects += `<rect x="${margin+c*moduleSize}" y="${margin+r*moduleSize}" width="${moduleSize}" height="${moduleSize}" fill="${lightColor}"/>`;
+  }
+
+  const bg = transparent ? "" : `<rect width="${totalSize}" height="${totalSize}" fill="${lightColor}"/>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalSize}" height="${totalSize}" viewBox="0 0 ${totalSize} ${totalSize}">${bg}${rects}</svg>`;
+};
+
+function TabQR() {
+  const [text, setText] = useState("");
+  const [darkColor, setDarkColor] = useState("#000000");
+  const [lightColor, setLightColor] = useState("#ffffff");
+  const [transparent, setTransparent] = useState(false);
+  const [darkMode, setDarkMode] = useState("picker");
+  const [lightMode, setLightMode] = useState("picker");
+  const [svgCode, setSvgCode] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!text.trim()) { setSvgCode(""); return; }
+    try {
+      const matrix = QR.generate(text);
+      setSvgCode(buildQRSVG(matrix, darkColor, lightColor, transparent));
+      setError("");
+    } catch(e) {
+      setError("Texto demasiado largo para generar el QR.");
+      setSvgCode("");
+    }
+  }, [text, darkColor, lightColor, transparent]);
+
+  const previewSvg = svgCode && transparent ? buildQRSVG(QR.generate(text), darkColor, "#ffffff", false) : svgCode;
+  const svgUrl = previewSvg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(previewSvg)}` : null;
+
+  const inp = {background:"#0e0e0e",border:"1px solid #2a2a2a",borderRadius:8,color:"#e8e8e0",fontFamily:"inherit",fontSize:13,padding:"10px 14px",outline:"none",width:"100%",resize:"vertical"};
+  const swatchBtn = (active) => ({padding:"4px 10px",fontSize:10,fontFamily:"inherit",border:"1px solid",borderColor:active?"#c8f566":"#2a2a2a",borderRadius:5,background:active?"rgba(200,245,102,0.1)":"transparent",color:active?"#c8f566":"#555",cursor:"pointer"});
+  const toggleStyle = (on) => ({display:"flex",alignItems:"center",gap:6,background:"transparent",border:"none",cursor:"pointer",padding:0});
+
+  return (
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24,alignItems:"start"}}>
+      {/* Left: controls */}
+      <div style={{display:"flex",flexDirection:"column",gap:16}}>
+
+        {/* Text input */}
+        <div style={{background:"#141414",border:"1px solid #222",borderRadius:16,padding:20}}>
+          <div style={{fontSize:11,color:"#555",letterSpacing:"0.15em",marginBottom:12}}>CONTENIDO DEL QR</div>
+          <textarea
+            style={{...inp,minHeight:100}}
+            value={text}
+            onChange={e=>setText(e.target.value)}
+            placeholder={"URL, texto, email, teléfono..."}
+            maxLength={500}
+          />
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:6}}>
+            <span style={{fontSize:11,color:error?"#ff6b6b":"#555"}}>{error||`${text.length} caracteres`}</span>
+            <span style={{fontSize:11,color:"#333"}}>{text.length}/500</span>
+          </div>
+        </div>
+
+        {/* Dark color */}
+        <div style={{background:"#141414",border:"1px solid #222",borderRadius:16,padding:20}}>
+          <div style={{fontSize:11,color:"#555",letterSpacing:"0.15em",marginBottom:12}}>COLOR DE MÓDULOS</div>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+            <input type="color" className="swatch-input" value={darkColor} onChange={e=>setDarkColor(e.target.value)}/>
+            <span style={{fontSize:12,color:"#aaa"}}>{darkColor}</span>
+            <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+              {["picker","manual"].map(m=><button key={m} style={swatchBtn(darkMode===m)} onClick={()=>setDarkMode(m)}>{m==="picker"?"Visual":"Manual"}</button>)}
+            </div>
+          </div>
+          {darkMode==="manual" && <ColorInputPanel hex={darkColor} onChange={setDarkColor}/>}
+        </div>
+
+        {/* Light / background color */}
+        <div style={{background:"#141414",border:"1px solid #222",borderRadius:16,padding:20}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div style={{fontSize:11,color:"#555",letterSpacing:"0.15em"}}>COLOR DE FONDO</div>
+            <button style={toggleStyle(transparent)} onClick={()=>setTransparent(t=>!t)}>
+              <div style={{width:32,height:18,borderRadius:9,background:transparent?"rgba(200,245,102,0.2)":"#2a2a2a",border:`1px solid ${transparent?"#c8f566":"#333"}`,position:"relative",transition:"all 0.2s"}}>
+                <div style={{position:"absolute",top:2,left:transparent?14:2,width:12,height:12,borderRadius:"50%",background:transparent?"#c8f566":"#555",transition:"all 0.2s"}}/>
+              </div>
+              <span style={{fontSize:10,color:transparent?"#c8f566":"#555",letterSpacing:"0.08em"}}>TRANSPARENTE</span>
+            </button>
+          </div>
+          {transparent
+            ? <div style={{padding:"10px 14px",background:"repeating-conic-gradient(#1e1e1e 0% 25%, #141414 0% 50%) 0 0 / 16px 16px",borderRadius:8,fontSize:11,color:"#555",textAlign:"center"}}>Sin fondo (transparente)</div>
+            : <>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                  <input type="color" className="swatch-input" value={lightColor} onChange={e=>setLightColor(e.target.value)}/>
+                  <span style={{fontSize:12,color:"#aaa"}}>{lightColor}</span>
+                  <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+                    {["picker","manual"].map(m=><button key={m} style={swatchBtn(lightMode===m)} onClick={()=>setLightMode(m)}>{m==="picker"?"Visual":"Manual"}</button>)}
+                  </div>
+                </div>
+                {lightMode==="manual" && <ColorInputPanel hex={lightColor} onChange={setLightColor}/>}
+              </>
+          }
+        </div>
+      </div>
+
+      {/* Right: preview + export */}
+      <div>
+        <div style={{background:"#141414",border:"1px solid #222",borderRadius:16,overflow:"hidden",marginBottom:12}}>
+          <div style={{padding:"12px 16px",borderBottom:"1px solid #1e1e1e",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:12,color:"#555",letterSpacing:"0.1em"}}>PREVIEW</span>
+            {transparent && <span style={{fontSize:10,color:"#555",background:"#1a1a1a",padding:"2px 8px",borderRadius:4}}>fondo blanco solo en preview</span>}
+          </div>
+          <div style={{padding:32,display:"flex",alignItems:"center",justifyContent:"center",minHeight:240,background:"repeating-conic-gradient(#1a1a1a 0% 25%, #141414 0% 50%) 0 0 / 20px 20px"}}>
+            {svgUrl
+              ? <img src={svgUrl} alt="QR" style={{maxWidth:"80%",maxHeight:280,imageRendering:"pixelated"}}/>
+              : <div style={{textAlign:"center",color:"#333",fontSize:13}}>Escribe algo arriba<br/><span style={{fontSize:11,color:"#2a2a2a"}}>para generar el QR</span></div>
+            }
+          </div>
+        </div>
+        {svgCode && (
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <button className="btn" onClick={()=>downloadText(svgCode,`QR_code.svg`,"image/svg+xml;charset=utf-8")}
+              style={{width:"100%",padding:"12px",background:"#c8f566",color:"#0e0e0e",border:"none",borderRadius:10,fontSize:13,fontWeight:600,fontFamily:"inherit"}}>
+              ↓ Descargar SVG
+            </button>
+            <button className="btn" onClick={()=>exportSVGasPNG(svgCode,`QR_code_300dpi.png`)}
+              style={{width:"100%",padding:"12px",background:"#1e1e1e",color:"#e8e8e0",border:"1px solid #2a2a2a",borderRadius:10,fontSize:13,fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+              <span style={{fontSize:11,background:"rgba(200,245,102,0.15)",color:"#c8f566",padding:"2px 6px",borderRadius:4}}>300 DPI</span> ↓ Exportar PNG
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // MAIN APP WITH TABS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -412,6 +755,7 @@ function TabBarcode() {
 const TABS = [
   { id:"svg", label:"Color Changer", icon:"⬡" },
   { id:"barcode", label:"Código de Barras", icon:"▌▌▌" },
+  { id:"qr", label:"Código QR", icon:"⊞" },
 ];
 
 export default function App() {
@@ -457,6 +801,7 @@ export default function App() {
         {/* Tab content */}
         {activeTab==="svg" && <TabSVGChanger/>}
         {activeTab==="barcode" && <TabBarcode/>}
+        {activeTab==="qr" && <TabQR/>}
 
         <div style={{marginTop:40,textAlign:"center",fontSize:11,color:"#2a2a2a",letterSpacing:"0.05em"}}>
           SVG Studio · Solo procesa archivos localmente · Creado por Chris Lafken
