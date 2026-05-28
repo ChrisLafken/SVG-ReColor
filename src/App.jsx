@@ -8,7 +8,7 @@ const hexToRgb = (hex) => ({ r: parseInt(hex.slice(1,3),16), g: parseInt(hex.sli
 const rgbToHex = (r,g,b) => "#"+[r,g,b].map(v=>Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,"0")).join("");
 const rgbToCmyk = (r,g,b) => { const rn=r/255,gn=g/255,bn=b/255,k=1-Math.max(rn,gn,bn); if(k===1)return{c:0,m:0,y:0,k:100}; return{c:Math.round((1-rn-k)/(1-k)*100),m:Math.round((1-gn-k)/(1-k)*100),y:Math.round((1-bn-k)/(1-k)*100),k:Math.round(k*100)}; };
 const cmykToHex = (c,m,y,k) => rgbToHex(255*(1-c/100)*(1-k/100),255*(1-m/100)*(1-k/100),255*(1-y/100)*(1-k/100));
-const toHex = (color) => { if(!color)return"#000000"; if(color.startsWith("#")){ if(color.length===4)return"#"+color[1]+color[1]+color[2]+color[2]+color[3]+color[3]; return color.toLowerCase(); } const c=document.createElement("canvas");c.width=c.height=1;const x=c.getContext("2d");x.fillStyle=color;x.fillRect(0,0,1,1);const[r,g,b]=x.getImageData(0,0,1,1).data;return rgbToHex(r,g,b); };
+const toHex = (color) => { if(!color)return"#000000"; if(color==="__default_black__")return"#000000"; if(color.startsWith("#")){ if(color.length===4)return"#"+color[1]+color[1]+color[2]+color[2]+color[3]+color[3]; return color.toLowerCase(); } const c=document.createElement("canvas");c.width=c.height=1;const x=c.getContext("2d");x.fillStyle=color;x.fillRect(0,0,1,1);const[r,g,b]=x.getImageData(0,0,1,1).data;return rgbToHex(r,g,b); };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // EAN-13 UTILITIES
@@ -193,13 +193,41 @@ function ColorInputPanel({ hex, onChange }) {
 
 const parseColorsFromSVG = (svgText) => {
   const s = new Set();
-  [/fill="([^"none][^"]*)"/g,/stroke="([^"none][^"]*)"/g,/fill:\s*([^;}"'\s]+)/g,/stroke:\s*([^;}"'\s]+)/g].forEach(re=>{
-    let m; while((m=re.exec(svgText))!==null){const c=m[1].trim();if(c!=="none"&&c!=="transparent"&&c!=="inherit"&&c!=="currentColor"&&!c.startsWith("url("))s.add(c);}
+  const skip = new Set(["none","transparent","inherit","currentColor","currentcolor"]);
+  // Match fill/stroke as attributes or inline styles
+  [/fill="([^"]+)"/g, /stroke="([^"]+)"/g, /fill:\s*([^;}"'\s]+)/g, /stroke:\s*([^;}"'\s]+)/g].forEach(re => {
+    let m;
+    while ((m = re.exec(svgText)) !== null) {
+      const c = m[1].trim();
+      if (!skip.has(c) && !c.startsWith("url(")) s.add(c);
+    }
   });
+  // Detect elements that rely on SVG default fill (black) — no fill attribute at all
+  const drawingTags = ["path","rect","circle","ellipse","polygon","polyline","line"];
+  const tagRe = new RegExp(`<(${drawingTags.join("|")})(\\s[^>]*)?>`, "gi");
+  let tm;
+  while ((tm = tagRe.exec(svgText)) !== null) {
+    const attrs = tm[2] || "";
+    const hasFill = /fill\s*=|fill\s*:/i.test(attrs);
+    const hasStyle = /style\s*=/.test(attrs);
+    const styleFill = hasStyle && /fill\s*:/i.test(attrs);
+    if (!hasFill && !styleFill) {
+      s.add("__default_black__");
+    }
+  }
   return Array.from(s);
 };
 
 const replaceColorInSVG = (svgText,oldColor,newColor) => {
+  if (oldColor === "__default_black__") {
+    const drawingTags = ["path","rect","circle","ellipse","polygon","polyline","line"];
+    const tagRe = new RegExp("(<(?:" + drawingTags.join("|") + "))((?:\\s+[^>]*?)?)\\s*(/>|>)", "gi");
+    return svgText.replace(tagRe, (match, tag, attrs, close) => {
+      const hasFill = /fill\s*=|fill\s*:/i.test(attrs);
+      if (hasFill) return match;
+      return tag + attrs + ` fill="${newColor}"` + close;
+    });
+  }
   const e=oldColor.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
   return svgText.replace(new RegExp(`fill="${e}"`,"g"),`fill="${newColor}"`).replace(new RegExp(`stroke="${e}"`,"g"),`stroke="${newColor}"`).replace(new RegExp(`fill:\\s*${e}([;}"'\\s])`,"g"),`fill:${newColor}$1`).replace(new RegExp(`stroke:\\s*${e}([;}"'\\s])`,"g"),`stroke:${newColor}$1`);
 };
@@ -281,7 +309,7 @@ function TabSVGChanger() {
                           <div style={{width:6,height:6,borderRadius:"50%",background:hex,flexShrink:0,boxShadow:`0 0 8px ${hex}66`}}/>
                           <div style={{flex:1,minWidth:0}}>
                             <div style={{fontSize:11,color:"#555",marginBottom:1}}>original</div>
-                            <div style={{fontSize:12,color:"#aaa",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{color}</div>
+                            <div style={{fontSize:12,color:"#aaa",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{color==="__default_black__"?"negro por defecto":color}</div>
                           </div>
                           <div style={{display:"flex",alignItems:"center",gap:8}}>
                             <input type="color" className="swatch-input" value={hex} onClick={e=>e.stopPropagation()} onChange={e=>setColorMap(p=>({...p,[color]:e.target.value}))}/>
@@ -669,7 +697,11 @@ export default function App() {
             <div style={{width:10,height:10,borderRadius:"50%",background:"#c8f566"}}/>
             <span style={{fontSize:11,letterSpacing:"0.2em",color:"#666",textTransform:"uppercase"}}>Design Tools</span>
           </div>
-          <h1 style={{fontFamily:"'Syne',sans-serif",fontSize:"clamp(28px,4vw,46px)",fontWeight:800,margin:0,lineHeight:1,letterSpacing:"-0.02em"}}>
+          <h1
+            onClick={()=>setActiveTab("svg")}
+            style={{fontFamily:"'Syne',sans-serif",fontSize:"clamp(28px,4vw,46px)",fontWeight:800,margin:0,lineHeight:1,letterSpacing:"-0.02em",cursor:"pointer",userSelect:"none"}}
+            title="Ir al inicio"
+          >
             SVG<span style={{color:"#c8f566"}}> Weás</span>
           </h1>
         </div>
